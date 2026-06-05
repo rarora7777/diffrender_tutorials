@@ -3,6 +3,7 @@
 #include <random>
 #include <set>
 #include <vector>
+#include <iostream>
 
 using namespace std;
 using Real = float;
@@ -26,6 +27,7 @@ using Vec3f = Vec3<Real>;
 Vec2f operator+(const Vec2f &v0, const Vec2f &v1) {return Vec2f{v0.x+v1.x, v0.y+v1.y};}
 Vec2f& operator+=(Vec2f &v0, const Vec2f &v1) {v0.x += v1.x; v0.y += v1.y; return v0;}
 Vec2f operator-(const Vec2f &v0, const Vec2f &v1) {return Vec2f{v0.x-v1.x, v0.y-v1.y};}
+Vec2f operator-(const Vec2f &v) {return Vec2f{-v.x, -v.y};}
 Vec2f operator*(Real s, const Vec2f &v) {return Vec2f{v.x * s, v.y * s};}
 Vec2f operator*(const Vec2f &v, Real s) {return Vec2f{v.x * s, v.y * s};}
 Vec2f operator/(const Vec2f &v, Real s) {return Vec2f{v.x / s, v.y / s};}
@@ -296,17 +298,101 @@ int main(int argc, char *argv[]) {
         // color
         {{0.3, 0.5, 0.3}, {0.3, 0.3, 0.5}}
     };
-    Img img(256, 256);
-    mt19937 rng(1234);
-    render(mesh, 4 /* samples_per_pixel */, rng, img);
-    save_img(img, "render.ppm");
 
-    Img adjoint(img.width, img.height, Vec3f{1, 1, 1});
-    Img dx(img.width, img.height), dy(img.width, img.height);
-    DTriangleMesh d_mesh(mesh.vertices.size(), mesh.colors.size());
-    d_render(mesh, adjoint, 4 /* interior_samples_per_pixel */,
-             img.width * img.height /* edge_samples_in_total */, rng, dx, dy, d_mesh);
-    save_img(dx, "dx_pos.ppm", false /*flip*/); save_img(dx, "dx_neg.ppm", true /*flip*/);
-    save_img(dy, "dy_pos.ppm", false /*flip*/); save_img(dy, "dy_neg.ppm", true /*flip*/);
+    // change the vertex indices to modify the triangle shapes
+    TriangleMesh target_mesh{
+        {{50.0, 25.0}, {200.0, 200.0}, {15.0, 150.0},
+         {200.0, 15.0}, {150.0, 250.0}, {50.0, 100.0}},
+        {{0, 1, 3}, {2, 4, 5}},
+        // color
+        {{0.3, 0.5, 0.3}, {0.3, 0.3, 0.5}}
+    };
+    mt19937 rng(1234);
+    Img img(256, 256);
+    Img adjoint(img.width, img.height);
+    
+    Img target_img(256, 256);
+    render(target_mesh, 4 /* samples_per_pixel */, rng, target_img);
+    save_img(target_img, "target.ppm");
+
+
+    // Get max_iter from arguments
+    int max_iter = 500; // default value
+    if (argc >= 2)
+    {
+        max_iter = atoi(argv[1]);
+    }
+    cout << "max_iter: " << max_iter << endl;
+    
+    float learning_rate = 0.1f;
+    if (argc >= 3)
+    {
+        learning_rate = atof(argv[2]);
+    }
+    cout << "learning_rate: " << learning_rate << endl;
+
+    float converged_loss = 1e-3f;
+    
+    for (int i=0; i<max_iter; ++i)
+    {
+        // set Img to zeros
+        for (int y = 0; y < img.height; y++)
+        {
+            for (int x = 0; x < img.width; x++)
+            {
+                img.color[y * img.width + x] = Vec3f{0, 0, 0};
+                adjoint.color[y * img.width + x] = Vec3f{0, 0, 0};
+            }
+        }               
+        render(mesh, 4 /* samples_per_pixel */, rng, img);
+        save_img(img, "render_" + to_string(i) + ".ppm");
+
+        // the adjoint image, which is the gradient of the loss w.r.t. the rendered image.
+        float loss = 0;
+        for (int y = 0; y < img.height; y++)
+        {
+            for (int x = 0; x < img.width; x++)
+            {
+                auto c = img.color[y * img.width + x];
+                auto target_c = target_img.color[y * img.width + x];
+                adjoint.color[y * img.width + x] = 2 * (c - target_c);
+                loss += dot(c - target_c, c - target_c) / (img.width * img.height);
+            }
+        }
+        save_img(adjoint, "adjoint" + to_string(i) + ".ppm");
+        std::cout << "Iteration " << i << ": " << std::endl;
+        std::cout << "Loss = " << loss << std::endl;
+
+        if (loss < converged_loss)
+        {
+            std::cout << "Converged!" << std::endl;
+            break;
+        }
+
+        Img dx(img.width, img.height), dy(img.width, img.height);
+        DTriangleMesh d_mesh(mesh.vertices.size(), mesh.colors.size());
+        d_render(mesh, adjoint, 4 /* interior_samples_per_pixel */,
+                 img.width * img.height /* edge_samples_in_total */, rng, dx, dy, d_mesh);
+
+
+        for (int j = 0; j < (int)mesh.vertices.size(); j++)
+        {
+            std::cout << "d_vertex[" << j << "] = (" << d_mesh.vertices[j].x << ", " << d_mesh.vertices[j].y << ")" << std::endl;
+            mesh.vertices[j] += -learning_rate * d_mesh.vertices[j];
+        }
+        for (int j = 0; j < (int)mesh.colors.size(); j++)
+        {
+            std::cout << "d_color[" << j << "] = (" << d_mesh.colors[j].x << ", " << d_mesh.colors[j].y << ", " << d_mesh.colors[j].z << ")" << std::endl;
+            mesh.colors[j] += -learning_rate * d_mesh.colors[j] / (img.width * img.height); // scale the color gradient to make the optimization more stable
+            mesh.colors[j].x = clamp(mesh.colors[j].x, 0.0f, 1.0f);
+            mesh.colors[j].y = clamp(mesh.colors[j].y, 0.0f, 1.0f);
+            mesh.colors[j].z = clamp(mesh.colors[j].z, 0.0f, 1.0f);
+        }
+
+        save_img(dx, "dx_pos" + to_string(i) + ".ppm", false /*flip*/);
+        save_img(dx, "dx_neg" + to_string(i) + ".ppm", true /*flip*/);
+        save_img(dy, "dy_pos" + to_string(i) + ".ppm", false /*flip*/);
+        save_img(dy, "dy_neg" + to_string(i) + ".ppm", true /*flip*/);
+    }
     return 0;
 }

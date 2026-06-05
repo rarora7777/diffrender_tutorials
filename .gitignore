@@ -1,1 +1,4 @@
 bin/
+*.ppm
+*.gif
+2d_triangles
