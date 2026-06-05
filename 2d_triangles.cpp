@@ -316,15 +316,15 @@ int main(int argc, char *argv[]) {
     save_img(target_img, "target.ppm");
 
 
-    // Get max_iter from arguments
-    int max_iter = 500; // default value
+    // Parse arguments
+    int max_iter = 1000;
     if (argc >= 2)
     {
         max_iter = atoi(argv[1]);
     }
     cout << "max_iter: " << max_iter << endl;
     
-    float learning_rate = 0.1f;
+    float learning_rate = 0.2f;
     if (argc >= 3)
     {
         learning_rate = atof(argv[2]);

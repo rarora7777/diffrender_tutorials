@@ -1,4 +1,5 @@
 bin/
 *.ppm
 *.gif
+!results/*.gif
 2d_triangles
